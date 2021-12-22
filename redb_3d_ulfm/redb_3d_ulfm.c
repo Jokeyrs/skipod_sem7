@@ -23,7 +23,7 @@ double *tmp = NULL;
 double ***A = NULL;
 double ***B = NULL;
 int CHECK_FREQ = 10;
-int fst_layer, lst_layer, lst_proc; // A[fst_layer:lst_layer,:,:]
+int fst_layer, lst_layer, lst_proc;
 char path[256];
 MPI_Comm work_comm;
 long long N;
@@ -32,7 +32,6 @@ int n_layers;
 int rank;
 
 
-// only works if one process dies ;(
 static void errhandler(MPI_Comm* pcomm, int* perr, ...) {
     MPI_Comm comm = *pcomm;
     int err = *perr;
@@ -49,13 +48,11 @@ static void errhandler(MPI_Comm* pcomm, int* perr, ...) {
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
 
-    // find out what process died
     MPIX_Comm_failure_ack(comm);
     MPIX_Comm_failure_get_acked(comm, &group_f);
     MPI_Group_size(group_f, &nf);
     MPI_Error_string(err, errstr, &len);
-    printf("Rank %d / %d: Notified of error %s. %d found dead: ",
-           rank, size, errstr, nf);
+    printf("Rank %d / %d: Notified of error %s. %d found dead: ", rank, size, errstr, nf);
 
     ranks_gf = (int*) malloc(nf * sizeof(int));
     ranks_gc = (int*) malloc(nf * sizeof(int));
@@ -71,24 +68,20 @@ static void errhandler(MPI_Comm* pcomm, int* perr, ...) {
     printf("\n");
 
 
-    // replace dead process with idle in next and prev
-    // also adjust for rank shift caused by shrinkage
     for (int i = 0; i < msg_list_len; ++i) {
-        // n_proc, is size - 1, since we reserved one process for this occasion
         if (next[i] == ranks_gc[0]) {
-            next[i] = n_proc - 1; // adjust for shrinkage
+            next[i] = n_proc - 1;
         } else if (next[i] > ranks_gc[0]) {
-            next[i] = next[i] - 1; // adjust for shrinkage
+            next[i] = next[i] - 1;
         }
         if (prev[i] == ranks_gc[0]) {
-            prev[i] = n_proc - 1; // adjust for shrinkage
+            prev[i] = n_proc - 1;
         } else if (prev[i] > ranks_gc[0]) {
-            prev[i] = prev[i] - 1; // adjust for shrinkage
+            prev[i] = prev[i] - 1;
         }
     }
 
     if (idle) {
-        // switch identity, become the dead process
         idle = false;
         proc = ranks_gc[0];
 
@@ -109,7 +102,6 @@ static void errhandler(MPI_Comm* pcomm, int* perr, ...) {
         }
         n_layers = lst_layer - fst_layer;
 
-        // allocate the memory
         tmp = malloc((n_layers + 2) * N * N * sizeof(*tmp));
         A = malloc((n_layers + 2) * sizeof(*A));
         for (int i = 0; i < n_layers + 2; ++i) {
@@ -120,7 +112,6 @@ static void errhandler(MPI_Comm* pcomm, int* perr, ...) {
             }
         }
 
-        // final array allocation (only for the 0th process)
         if (proc == 0) {
             tmp = malloc(N * N * N * sizeof(*tmp));
             B = malloc(N * sizeof(*B));
@@ -134,14 +125,12 @@ static void errhandler(MPI_Comm* pcomm, int* perr, ...) {
         }
     }
 
-    // shrink communicator and delete old one
     MPI_Comm tmp_comm;
     MPIX_Comm_shrink(work_comm, &tmp_comm);
 
     MPI_Comm_free(&work_comm);
     work_comm = tmp_comm;
 
-    // make everyone restore from latest checkpoint
     Current_State = RESTORE;
 }
 
@@ -192,11 +181,9 @@ int main(int argc, char **argv)
     MPI_Comm_set_errhandler(MPI_COMM_WORLD, handler);
 
 
-    // proc can change, rank cannot
     rank = proc;
 
 
-    // itialize next and prev lists
     msg_list_len = n_proc;
     prev = malloc(msg_list_len * sizeof(prev));
     next = malloc(msg_list_len * sizeof(next));
@@ -213,8 +200,6 @@ int main(int argc, char **argv)
     if (argc == 4) {
         sscanf(argv[3], "%d", &victim);
     }
-    
-    // calculation domain division
 
     double w = 0.5;
     double eps;
@@ -223,10 +208,9 @@ int main(int argc, char **argv)
     MPI_Request req[4];
     MPI_Status status[4];
 
-    n_proc = n_proc - 1; // reserve one process for the case of crash
-    idle = proc == n_proc; // only true for the reserved process
+    n_proc = n_proc - 1;
+    idle = proc == n_proc;
 
-    // divide 3d matrix by layers if n_proc > N use only N processes with one layer each
     int color;
     if (!idle) {
         if (N < n_proc) {
@@ -250,10 +234,7 @@ int main(int argc, char **argv)
         color = 0;
     }
 
-    // leave processes with non-zero layer count and idle ones
     MPI_Comm_split(MPI_COMM_WORLD, color, proc, &work_comm);
-
-    // working memory allocation
     if (!idle) {
         tmp = malloc((n_layers + 2) * N * N * sizeof(*tmp));
         A = malloc((n_layers + 2) * sizeof(*A));
@@ -265,7 +246,6 @@ int main(int argc, char **argv)
             }
         }
 
-        // final array allocation (only for the 0th process)
         if (proc == 0) {
             tmp = malloc(N * N * N * sizeof(*tmp));
             B = malloc(N * sizeof(*B));
@@ -294,9 +274,7 @@ int main(int argc, char **argv)
 
     int it = 0;
     for (; it < n_iters; ++it) {
-        // synchronization duties
         if (it % CHECK_FREQ == 0) {
-            // idle has no data
             if (!idle) {
                 sprintf(path, "./checkpoints/%d.txt", proc);
                 switch (Current_State) {
@@ -304,23 +282,18 @@ int main(int argc, char **argv)
                         dump_data(path, A, N, n_layers);
                         break;
                     case RESTORE:
-                        // load the latest checkpoint
                         load_data(path, A, N, n_layers);
                         it -= CHECK_FREQ;
                         Current_State = BACKUP;
                         break;
                 }
             }
-
-            // enter the slaughter
             MPI_Barrier(work_comm);
             if (rank == victim) {
                 raise(SIGKILL);
             }
             MPI_Barrier(work_comm);
         }
-
-        // keep waiting for a crash to happen
         if (idle) {
             MPI_Allreduce(&eps, &eps, 1, MPI_DOUBLE, MPI_MAX, work_comm);
             continue;
@@ -354,8 +327,6 @@ int main(int argc, char **argv)
                 }
             }
         }
-
-        // exchange of bordering regions
 
         if (proc != 0) {
             MPI_Irecv(A[0][0], N * N, MPI_DOUBLE, prev[proc], 217,
